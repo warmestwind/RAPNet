@@ -8,7 +8,7 @@ This repository provides the official PyTorch implementation of RAP(Regitration 
 
 ---
 # Getting Started
-
+test.py
 ---
 # Citation
 ```
