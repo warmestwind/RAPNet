@@ -293,7 +293,7 @@ class SDnetSegmentor(nn.Module):
         max_corr = F.interpolate(max_corr_e3.float(), size=(inpt.shape[-2:]), mode='nearest').requires_grad_()
 
 
-        return logit, sp_prior, max_corr, sp_img_prior
+        return logit, sp_prior, max_corr
 
 
 class RAP(nn.Module):
