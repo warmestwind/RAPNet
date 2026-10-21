@@ -28,7 +28,7 @@ class DiceLoss(_WeightedLoss):
     Dice Loss for a batch of samples
     """
 
-    def forward(self, output, target, weights=torch.tensor([0.3,0.7]).cuda(), binary=False):
+    def forward(self, output, target, weights=(0.3, 0.7), binary=False):
         """
         Forward pass
 
@@ -40,6 +40,9 @@ class DiceLoss(_WeightedLoss):
         """
         if binary:
             return self._dice_loss_binary(output, target)
+        if weights is not None:
+            # Preserve defaults and explicit unweighted calls without CUDA at import.
+            weights = torch.as_tensor(weights, device=output.device, dtype=output.dtype)
         # output = F.softmax(output, dim=1)
         return self._dice_loss_multichannel(output, target, weights)
 
@@ -300,7 +303,7 @@ def one_hot2dist(seg: np.ndarray) -> np.ndarray:
 
     res = np.zeros_like(seg)
     for c in range(C):
-        posmask = seg[c].astype(np.bool)
+        posmask = seg[c].astype(bool)
 
         if posmask.any():
             negmask = ~posmask

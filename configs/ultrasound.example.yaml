@@ -1,0 +1,42 @@
+# Example for the supplied ultrasound training path.
+# Replace class_dirs with your own paired NRRD data directories.
+# Relative paths are resolved from the working directory (normally the repo root).
+# This file does not define or reproduce the paper's patient-level splits.
+COMMON:
+  model_name: rapnet
+  log_dir: logs
+  device: cuda:0
+  exp_dir: experiments
+
+DATA:
+  class_dirs:
+    LV2: data/LV2
+    LV3: data/LV3
+    LV4: data/LV4
+  train_classes: [LV2, LV3, LV4]
+  labels: [Background, Foreground]
+
+# Network settings retained from settings.yaml.
+NETWORK:
+  num_class: 2
+  num_channels: 1
+  num_filters: 64
+  kernel_h: 5
+  kernel_w: 5
+  kernel_c: 1
+  stride_conv: 1
+  pool: 2
+  stride_pool: 2
+  se_block: SSE
+  drop_out: 0
+
+TRAINING:
+  exp_name: rapnet_ultrasound
+  shot: 1
+  train_batch_size: 2
+  num_workers: 0
+  log_nth: 10
+  num_epochs: 200
+  # The legacy loop does not resume automatically. This flag preserves existing logs.
+  use_last_checkpoint: true
+  # Optimizer behavior stays in solver_us_pro.py: Adam, lr=5e-5, weight_decay=1e-5.
