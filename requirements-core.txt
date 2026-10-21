@@ -1,0 +1,4 @@
+# Install a PyTorch build appropriate for your CPU/CUDA environment first.
+# The compatibility check for this maintenance update uses torch 2.7.1.
+torch==2.7.1
+PyYAML>=6.0,<7

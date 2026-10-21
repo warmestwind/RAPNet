@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+logs/
+experiments/
+saved_models/
+predictions/
+train_la_list.npz
+*.pth
+*.pth.tar
+*.pt
+*.nrrd
+*.nii
+*.nii.gz

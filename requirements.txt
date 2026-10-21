@@ -1,0 +1,10 @@
+-r requirements-core.txt
+numpy>=1.24,<3
+pynrrd>=1.0,<2
+opencv-python-headless>=4.8,<5
+nibabel>=5.2,<6
+scipy>=1.10,<2
+h5py>=3.10,<4
+matplotlib>=3.7,<4
+tensorboard>=2.16,<3
+torchvision==0.22.1

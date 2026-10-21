@@ -1,125 +1,124 @@
+"""Configurable entry point for the released CUDA training loop."""
+
 import argparse
-import os
+import copy
+
 import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-from torch.optim.lr_scheduler import MultiStepLR
-# from dataloaders_medical.prostate import *
-# import few_shot_segmentor as fs
-import RAP as fs
-# import v9_only_pro as fs
-# import v9_only_stn as fs
-# import v9_pro_stn as fs
-# import v9_decoder as fs
-# import lba_cbam_v9_noskip as fs
-from settings import Settings
-from solver_us_pro import Solver
-# from solver import Solver
-# from solver_se import Solver
-from dataset import transform, dataset_us
+
 from utils import config
 
-torch.set_default_tensor_type('torch.FloatTensor')
 
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+def _positive_int(value):
+    value = int(value)
+    if value < 1:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return value
 
-def get_configs():
-    parser = argparse.ArgumentParser(description='PyTorch Few Shot Semantic Segmentation')
-    parser.add_argument('--config', type=str, default='./settings.yaml', help='config file')
-    parser.add_argument('--mode', '-m',  default='train',
-                        help='run mode, valid values are train and eval')
-    parser.add_argument('--device', '-d', default=0,
-                        help='device to run on')
-    args = parser.parse_args()
-    assert args.config is not None
+
+def _nonnegative_int(value):
+    value = int(value)
+    if value < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return value
+
+
+def get_configs(argv=None):
+    parser = argparse.ArgumentParser(description="RAPNet ultrasound training (CUDA required)")
+    parser.add_argument("--config", default="./settings.yaml", help="YAML configuration file")
+    parser.add_argument("--mode", "-m", default="train", choices=["train"],
+                        help="This entry point implements training only")
+    parser.add_argument("--device", "-d", default=None,
+                        help="CUDA index or cuda:N; overrides COMMON.device")
+    parser.add_argument("--shot", type=_positive_int, default=None,
+                        help="Support examples per episode; overrides TRAINING.shot")
+    parser.add_argument("--batch-size", type=_positive_int, default=None,
+                        help="Overrides TRAINING.train_batch_size")
+    parser.add_argument("--num-workers", type=_nonnegative_int, default=None,
+                        help="Overrides TRAINING.num_workers")
+    args = parser.parse_args(argv)
     cfg = config.load_cfg_from_cfg_file(args.config)
-    return cfg, args  # cfg.xxx
+    return cfg, args
 
 
-def train(train_params, common_params, data_params, net_params):
+def _cuda_index(value):
+    if isinstance(value, int) or str(value).isdigit():
+        index = int(value)
+    else:
+        device = torch.device(value)
+        if device.type != "cuda":
+            raise ValueError("The released training loop requires CUDA; use the synthetic smoke example for CPU checks.")
+        index = 0 if device.index is None else device.index
+    if index < 0:
+        raise ValueError("CUDA device index must be non-negative.")
+    return index
 
-    train_transform = [
-        # transform.RandScale([0.8, 1.25]),
-        # transform.RandRotate([-10, 10], padding=mean, ignore_label=0),
+
+def train(train_params, common_params, data_params, net_params, args=None):
+    # Import the full training stack only when training is requested.
+    import RAP as fs
+    from dataset import transform, dataset_us
+    from solver_us_pro import Solver
+
+    device_value = args.device if args is not None and args.device is not None else common_params.get("device", "cuda:0")
+    device = _cuda_index(device_value)
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is unavailable. Install a CUDA-enabled PyTorch build and select an available GPU.")
+    if device >= torch.cuda.device_count():
+        raise ValueError("CUDA device {} is unavailable; this process can see {} device(s).".format(
+            device, torch.cuda.device_count()))
+    # Respect CUDA_VISIBLE_DEVICES supplied by the caller; do not overwrite it.
+    torch.cuda.set_device(device)
+
+    def setting(flag_name, config_name, default, allow_zero=False):
+        override = getattr(args, flag_name, None) if args is not None else None
+        value = train_params.get(config_name, default) if override is None else override
+        if not isinstance(value, int) or isinstance(value, bool) or value < (0 if allow_zero else 1):
+            raise ValueError("TRAINING.{} must be {} integer.".format(
+                config_name, "a non-negative" if allow_zero else "a positive"))
+        return value
+
+    shot = setting("shot", "shot", 1)
+    batch_size = setting("batch_size", "train_batch_size", 2)
+    workers = setting("num_workers", "num_workers", 1, allow_zero=True)
+    train_transform = transform.Compose([
         transform.RandomGaussianBlur(),
-        # transform.RandomHorizontalFlip(),
-        # transform.Crop([256, 256], crop_type='rand', padding=mean, ignore_label=0),
         transform.Resize_fy([256, 256]),
         transform.ToTensor(),
-        transform.Scaling()]
-    train_transform = transform.Compose(train_transform)
-    train_data = dataset_us.SemData_US(shot=1,  transform=train_transform, mode='train')
-    train_sampler = None
-    trainloader = torch.utils.data.DataLoader(train_data, batch_size=2, shuffle=(train_sampler is None),
-                                               num_workers=1, pin_memory=True, sampler=train_sampler,
-                                               drop_last=False)
+        transform.Scaling(),
+    ])
+    train_data = dataset_us.SemData_US(
+        shot=shot, transform=train_transform, mode="train",
+        class_dirs=data_params.get("class_dirs"),
+        classes=data_params.get("train_classes"),
+    )
+    trainloader = torch.utils.data.DataLoader(
+        train_data, batch_size=batch_size, shuffle=True,
+        num_workers=workers, pin_memory=True, drop_last=False,
+    )
+    print("Training: device=cuda:{}, shot={}, batch_size={}, workers={}, volumes={}".format(
+        device, shot, batch_size, workers, len(train_data)))
 
-    validationloader = trainloader
-
-
-
-    final_model_path = os.path.join(
-        common_params['save_model_dir'],  'last.pth.tar')
-
-    few_shot_model = fs.RAP(net_params)
-
-
-    solver = Solver(few_shot_model,
-                    device=common_params['device'],
-                    num_class=net_params['num_class'],
-                    optim_args={"lr": train_params['learning_rate'],
-                                "weight_decay": train_params['optim_weight_decay'],
-                                "momentum": train_params['momentum']},
-                    model_name=common_params['model_name'],
-                    exp_name=train_params['exp_name'],
-                    labels=data_params['labels'],
-                    log_nth=train_params['log_nth'],
-                    num_epochs=train_params['num_epochs'],
-                    lr_scheduler_step_size=train_params['lr_scheduler_step_size'],
-                    lr_scheduler_gamma=train_params['lr_scheduler_gamma'],
-                    use_last_checkpoint=train_params['use_last_checkpoint'],
-                    log_dir=common_params['log_dir'],
-                    exp_dir=common_params['exp_dir'])
-
-    solver.train(trainloader, validationloader)
-   # solver.save_best_model(final_model_path)
-    print("final model saved @ " + str(final_model_path))
+    # RAP's constructor updates its parameter mapping internally.
+    model_params = copy.deepcopy(net_params)
+    few_shot_model = fs.RAP(model_params)
+    solver = Solver(
+        few_shot_model,
+        device=device,
+        num_class=model_params["num_class"],
+        model_name=common_params.get("model_name", "rapnet"),
+        exp_name=train_params["exp_name"],
+        labels=data_params.get("labels", ["Background", "Foreground"]),
+        log_nth=train_params.get("log_nth", 10),
+        num_epochs=train_params["num_epochs"],
+        use_last_checkpoint=train_params.get("use_last_checkpoint", True),
+        log_dir=common_params.get("log_dir", "logs"),
+        exp_dir=common_params.get("exp_dir", "experiments"),
+    )
+    # Solver keeps the release's fixed Adam settings and training-only phase.
+    # Its second argument is retained for compatibility, not independent validation.
+    solver.train(trainloader, trainloader)
 
 
-
-
-
-if __name__ == '__main__':
-
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument('--mode', '-m',  default='train',
-    #                     help='run mode, valid values are train and eval')
-    # parser.add_argument('--device', '-d', default=0,
-    #                     help='device to run on')
-    # args = parser.parse_args()
-    #
-    # settings = Settings() # parse .ini
-    # common_params, data_params, net_params, train_params, eval_params = settings['COMMON'], settings['DATA'], settings[
-    #     'NETWORK'], settings['TRAINING'], settings['EVAL']
-    #
-    # if args.device is not None:
-    #     common_params['device'] = args.device
-    #
-    # if args.mode == 'train':
-    #     train(train_params, common_params, data_params, net_params)
-    # elif args.mode == 'eval':
-    #     pass
-    # else:
-    #     raise ValueError(
-    #         'Invalid value for mode. only support values are train and eval')
-
+if __name__ == "__main__":
     cfgs, args = get_configs()
-    print(cfgs.DATA)
-    common_params, data_params, net_params, train_params, eval_params = cfgs.COMMON, cfgs.DATA, cfgs.NETWORK, \
-                                                                        cfgs.TRAINING, cfgs.EVAL
-
-    if args.device is not None:
-        common_params['device'] = args.device
-
-    if args.mode == 'train':
-        train(train_params, common_params, data_params, net_params)
+    train(cfgs.TRAINING, cfgs.COMMON, cfgs.DATA, cfgs.NETWORK, args)
